@@ -608,3 +608,20 @@ def team_overview():
 			"last_entry": last[0][0] if last and last[0][0] else None,
 		})
 	return out
+
+
+def _service_item(company):
+	"""A ready 'Professional services' item (SAC 998311, GST 18%) for billing time."""
+	abbr = frappe.get_cached_value("Company", company, "abbr")
+	code = f"{abbr}-PROFESSIONAL-SERVICES"
+	if not frappe.db.exists("Item", code):
+		doc = frappe.get_doc({"doctype": "Item", "item_code": code, "item_name": "Professional services",
+		                      "description": "Professional services", "item_group": _leaf("Item Group", prefer="Services"),
+		                      "stock_uom": "Hour" if frappe.db.exists("UOM", "Hour") else "Nos", "is_stock_item": 0,
+		                      "gst_hsn_code": "998311", "rpa_company": company})
+		template = f"GST 18% - {abbr}"
+		if frappe.db.exists("Item Tax Template", template):
+			doc.append("taxes", {"item_tax_template": template})
+		doc.flags.ignore_permissions = True
+		doc.insert()
+	return code

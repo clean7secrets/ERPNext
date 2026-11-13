@@ -30,8 +30,15 @@ def ensure():
 	from rpa_integration import branding, phase2
 	branding.ensure()
 	phase2.ensure()
-	from rpa_integration import phase3_words
+	from rpa_integration import payroll, phase3_words
 	phase3_words.ensure()
+	payroll.ensure_fields()
+	# Clients log hours, not clock times: several entries on one day must not count as overlapping.
+	for field in ("ignore_user_time_overlap", "ignore_employee_time_overlap", "ignore_workstation_time_overlap"):
+		if frappe.get_meta("Projects Settings").has_field(field):
+			frappe.db.set_single_value("Projects Settings", field, 1)
+	create_custom_fields({"Project": [{"fieldname": "rpa_hourly_rate", "label": "Hourly rate", "fieldtype": "Currency",
+	                                   "options": "INR", "insert_after": "customer"}]}, update=True)
 	for company in frappe.get_all("Company", pluck="name"):
 		company_defaults(company)
 

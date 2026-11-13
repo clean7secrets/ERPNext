@@ -41,21 +41,37 @@ class MyBusiness {
 		const d = this.data;
 		const n = d.numbers;
 		this.page.set_title(d.company);
-		const actions = [
-			["new-invoice", "file-text", __("New invoice"), true],
-			["receive", "wallet", __("Receive money"), true],
-			["new-quote", "file", __("New quote"), true],
-			["new-customer", "users", __("Add customer"), true],
-			["new-product", "package", __("Add product or service"), true],
-			["expense", "credit-card", __("Record expense"), this.has("accounting")],
-			["upload", "upload", __("Upload a bill"), this.has("accounting") || this.has("purchase")],
-			["purchase-bill", "file-plus", __("New purchase bill"), this.has("purchase")],
-			["pay", "send", __("Pay supplier"), this.has("purchase")],
-			["new-supplier", "truck", __("Add supplier"), this.has("purchase")],
-			["stock-in", "arrow-down", __("Stock in"), this.has("inventory")],
-			["stock-out", "arrow-up", __("Stock out"), this.has("inventory")],
-			["stock-count", "list", __("Stock count"), this.has("inventory")],
-		].filter((a) => a[3]);
+		// Buttons grouped by area; a group shows only when its plan is switched on.
+		const groups = [
+			[__("Sales"), true, [
+				["new-invoice", "file-text", __("New invoice")],
+				["receive", "wallet", __("Receive money")],
+				["new-quote", "file", __("New quote")],
+				["new-customer", "users", __("Add customer")],
+				["new-product", "package", __("Add product or service")],
+			]],
+			[__("Expenses"), this.has("accounting") || this.has("purchase"), [
+				["upload", "upload", __("Upload a bill")],
+				...(this.has("accounting") ? [["expense", "credit-card", __("Record expense")]] : []),
+			]],
+			[__("Purchases"), this.has("purchase"), [
+				["purchase-bill", "file-plus", __("New purchase bill")],
+				["pay", "send", __("Pay supplier")],
+				["new-supplier", "truck", __("Add supplier")],
+			]],
+			[__("Stock"), this.has("inventory"), [
+				["stock-in", "arrow-down", __("Stock in")],
+				["stock-out", "arrow-up", __("Stock out")],
+				["stock-count", "list", __("Stock count")],
+			]],
+			[__("Payroll"), this.has("hr_payroll"), [
+				["employee", "user-plus", __("Add employee")],
+				["run-salary", "calendar", __("Run monthly salary")],
+			]],
+			[__("Projects"), this.has("projects"), [
+				["log-time", "clock", __("Log time")],
+			]],
+		].filter((g) => g[1]);
 		const cards = [
 			[__("Sales this month"), inr(n.sales_month)],
 			[__("Money to collect"), inr(n.to_collect) + (n.overdue ? ` <span class="mb-overdue">${n.overdue} ${__("overdue")}</span>` : "")],
@@ -99,10 +115,15 @@ class MyBusiness {
 			<div class="mb-hello">${__("Hello")} ${frappe.utils.escape_html(d.first_name || "")} 👋</div>
 			${d.has_address ? "" : `<div class="mb-notice">${__("Add your business address once so it prints on your invoices.")}
 				<button class="btn btn-sm btn-primary" data-act="address">${__("Add address")}</button></div>`}
-			<div class="mb-actions">${actions.map((a) => `
-				<button class="mb-action" data-act="${a[0]}">${frappe.utils.icon(a[1], "lg")}<span>${a[2]}</span></button>`).join("")}
-			</div>
 			<div class="mb-cards">${cards.map((c) => `<div class="mb-card"><div class="mb-card-label">${c[0]}</div><div class="mb-card-value">${c[1]}</div></div>`).join("")}</div>
+			<div class="mb-groups${groups.length > 1 ? "" : " mb-single"}">${groups.map((g, i) => `
+				<div class="mb-group">
+					${groups.length > 1 ? `<div class="mb-group-title">${g[0]}</div>` : ""}
+					<div class="mb-actions${i === 0 ? " mb-first" : ""}">${g[2].map((a) => `
+						<button class="mb-action" data-act="${a[0]}">${frappe.utils.icon(a[1], "md")}<span>${a[2]}</span></button>`).join("")}
+					</div>
+				</div>`).join("")}
+			</div>
 			${reports}
 			${this.uploads_html()}
 			${this.bills_html()}
@@ -134,6 +155,9 @@ class MyBusiness {
 				"stock-out": () => this.stock_dialog("out"),
 				"stock-count": () => this.stock_dialog("count"),
 				address: () => this.address_dialog(),
+				employee: () => this.employee_dialog && this.employee_dialog(),
+				"run-salary": () => this.salary_dialog && this.salary_dialog(),
+				"log-time": () => this.timesheet_dialog && this.timesheet_dialog(),
 			})[act]();
 		});
 		this.$body.find("[data-receive]").on("click", (e) => this.receive_dialog($(e.currentTarget).attr("data-receive")));
@@ -578,6 +602,144 @@ class MyBusiness {
 				d.hide();
 				frappe.show_alert({ message: `${__("Saved")} · ${__("In hand")}: ${r.message.in_hand}`, indicator: "green" });
 				this.load();
+			},
+		});
+		d.show();
+	}
+
+	// ---------------------------------------------------------------- payroll
+	async employee_dialog() {
+		const d = new frappe.ui.Dialog({
+			title: __("Add employee"),
+			fields: [
+				{ fieldname: "full_name", label: __("Full name"), fieldtype: "Data", reqd: 1 },
+				{ fieldname: "gender", label: __("Gender"), fieldtype: "Select", options: "Male\nFemale\nOther", reqd: 1 },
+				{ fieldname: "date_of_birth", label: __("Date of birth"), fieldtype: "Date", reqd: 1 },
+				{ fieldname: "mobile", label: __("Mobile"), fieldtype: "Data" },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "designation", label: __("Job title"), fieldtype: "Data" },
+				{ fieldname: "date_of_joining", label: __("Date of joining"), fieldtype: "Date", reqd: 1, default: frappe.datetime.get_today() },
+				{ fieldname: "monthly_gross", label: __("Monthly salary (gross)"), fieldtype: "Currency", reqd: 1 },
+				{ fieldname: "pan", label: __("PAN (optional)"), fieldtype: "Data", length: 10 },
+				{ fieldtype: "Section Break", label: __("Deductions") },
+				{ fieldname: "pf", label: __("Deduct PF"), fieldtype: "Check" },
+				{ fieldname: "esi", label: __("Deduct ESI (salary up to ₹21,000)"), fieldtype: "Check" },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "pt", label: __("Deduct Professional Tax"), fieldtype: "Check", default: 1 },
+				{ fieldname: "how", fieldtype: "HTML", options: `<div class="text-muted small">${__("Salary is split as Basic 50%, HRA 40% of Basic and Special Allowance. Your CA team can change this.")}</div>` },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				await frappe.call({ method: "rpa_integration.payroll.add_employee", freeze: true, args: v });
+				d.hide();
+				frappe.show_alert({ message: __("Employee added"), indicator: "green" });
+				this.load();
+			},
+		});
+		d.show();
+	}
+
+	async salary_dialog() {
+		const months = [];
+		const now = new Date();
+		for (let i = 0; i < 6; i++) {
+			const m = new Date(now.getFullYear(), now.getMonth() - i, 1);
+			months.push({ value: `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, "0")}`,
+				label: m.toLocaleString("en-IN", { month: "long", year: "numeric" }) });
+		}
+		const emps = (await frappe.call({ method: "rpa_integration.payroll.employees" })).message || [];
+		const d = new frappe.ui.Dialog({
+			title: __("Run monthly salary"),
+			size: "large",
+			fields: [
+				{ fieldname: "month", label: __("Month"), fieldtype: "Select", options: months, default: months[0].value },
+				{ fieldname: "list", fieldtype: "HTML", options: emps.length
+					? `<div class="text-muted small mb-2">${emps.length} ${__("employees")}: ${emps.map((e) => frappe.utils.escape_html(e.employee_name)).join(", ")}</div>`
+					: `<div class="mb-empty">${__("Add your employees first.")}</div>` },
+				{ fieldname: "result", fieldtype: "HTML" },
+			],
+			primary_action_label: __("Make salary slips"),
+			primary_action: async (v) => {
+				const r = (await frappe.call({ method: "rpa_integration.payroll.run_salary", freeze: true,
+					freeze_message: __("Working out salaries…"), args: { month: v.month } })).message;
+				const t = r.totals;
+				const pdf = (n) => `/api/method/frappe.utils.print_format.download_pdf?doctype=Salary%20Slip&name=${encodeURIComponent(n)}`;
+				d.fields_dict.result.$wrapper.html(`
+					<table class="table table-sm mb-table"><thead><tr><th>${__("Employee")}</th><th class="text-right">${__("Days")}</th>
+					<th class="text-right">${__("Gross")}</th><th class="text-right">PF</th><th class="text-right">ESI</th><th class="text-right">PT</th>
+					<th class="text-right">${__("Net pay")}</th><th></th></tr></thead><tbody>
+					${r.rows.map((x) => `<tr><td>${frappe.utils.escape_html(x.employee)}</td><td class="text-right">${x.days}</td>
+						<td class="text-right">${inr(x.gross)}</td><td class="text-right">${inr(x.pf)}</td><td class="text-right">${inr(x.esi)}</td>
+						<td class="text-right">${inr(x.pt)}</td><td class="text-right"><b>${inr(x.net)}</b></td>
+						<td><a target="_blank" href="${pdf(x.slip)}">${__("Payslip")}</a></td></tr>`).join("")}
+					<tr><td><b>${__("Total")}</b></td><td></td><td class="text-right"><b>${inr(t.gross)}</b></td><td class="text-right">${inr(t.pf)}</td>
+						<td class="text-right">${inr(t.esi)}</td><td class="text-right">${inr(t.pt)}</td><td class="text-right"><b>${inr(t.net)}</b></td><td></td></tr>
+					</tbody></table>
+					<div class="text-muted small">${__("Employer PF")} ${inr(t.er_pf)} · ${__("Employer ESI")} ${inr(t.er_esi)}${r.entry ? ` · ${__("Booked in")} ${r.entry}` : ""}</div>
+					${(r.problems || []).length ? `<div class="mb-notice mt-2">${r.problems.map((p) => frappe.utils.escape_html(p)).join("<br>")}</div>` : ""}`);
+				d.set_primary_action(__("Mark salaries paid"), async () => {
+					await frappe.call({ method: "rpa_integration.payroll.pay_salaries", freeze: true, args: { month: v.month, paid_from: "Bank" } });
+					d.hide();
+					frappe.show_alert({ message: __("Salaries marked as paid"), indicator: "green" });
+					this.load();
+				});
+			},
+		});
+		d.show();
+	}
+
+	// ---------------------------------------------------------------- projects
+	async timesheet_dialog() {
+		const projects = (await frappe.call({ method: "rpa_integration.projects_api.projects" })).message || [];
+		const list = projects.length ? `<table class="table table-sm mb-table"><thead><tr><th>${__("Project")}</th><th class="text-right">${__("Unbilled hours")}</th>
+			<th class="text-right">${__("Amount")}</th><th></th></tr></thead><tbody>${projects.map((p) => `<tr>
+			<td>${frappe.utils.escape_html(p.project_name)}</td><td class="text-right">${p.unbilled_hours}</td><td class="text-right">${inr(p.unbilled_amount)}</td>
+			<td class="text-right">${p.unbilled_hours > 0 && p.customer ? `<button class="btn btn-xs btn-primary" data-bill="${frappe.utils.escape_html(p.name)}">${__("Bill these hours")}</button>` : ""}</td>
+			</tr>`).join("")}</tbody></table>` : "";
+		const d = new frappe.ui.Dialog({
+			title: __("Log time"),
+			fields: [
+				{ fieldname: "project", label: __("Project"), fieldtype: "Select", options: ["", ...projects.map((p) => ({ value: p.name, label: p.project_name }))], reqd: 1,
+				  description: `<a href="#" class="mb-new-project">${__("+ New project")}</a>` },
+				{ fieldname: "hours", label: __("Hours"), fieldtype: "Float", reqd: 1 },
+				{ fieldname: "rate", label: __("Rate per hour (optional)"), fieldtype: "Currency" },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "work_date", label: __("Date"), fieldtype: "Date", default: frappe.datetime.get_today() },
+				{ fieldname: "billable", label: __("Bill this to the customer"), fieldtype: "Check", default: 1 },
+				{ fieldname: "note", label: __("What did you do?"), fieldtype: "Small Text" },
+				{ fieldtype: "Section Break" },
+				{ fieldname: "list", fieldtype: "HTML", options: list },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				await frappe.call({ method: "rpa_integration.projects_api.log_time", freeze: true, args: v });
+				d.hide();
+				frappe.show_alert({ message: __("Time saved"), indicator: "green" });
+			},
+		});
+		d.$wrapper.find(".mb-new-project").on("click", (e) => { e.preventDefault(); d.hide(); this.project_dialog(); });
+		d.$wrapper.find("[data-bill]").on("click", async (e) => {
+			const r = (await frappe.call({ method: "rpa_integration.projects_api.bill_hours", freeze: true,
+				args: { project: $(e.currentTarget).attr("data-bill") } })).message;
+			d.hide();
+			this.after_save("Sales Invoice", { name: r.name, grand_total: r.grand_total, docstatus: 1 });
+		});
+		d.show();
+	}
+
+	project_dialog() {
+		const d = new frappe.ui.Dialog({
+			title: __("New project"),
+			fields: [
+				{ fieldname: "project_name", label: __("Project name"), fieldtype: "Data", reqd: 1 },
+				{ fieldname: "customer", label: __("Customer"), fieldtype: "Link", options: "Customer" },
+				{ fieldname: "hourly_rate", label: __("Rate per hour"), fieldtype: "Currency" },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				await frappe.call({ method: "rpa_integration.projects_api.create_project", freeze: true, args: v });
+				d.hide();
+				this.timesheet_dialog();
 			},
 		});
 		d.show();
