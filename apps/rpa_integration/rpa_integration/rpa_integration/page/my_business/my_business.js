@@ -49,6 +49,12 @@ class MyBusiness {
 			["new-product", "package", __("Add product or service"), true],
 			["expense", "credit-card", __("Record expense"), this.has("accounting")],
 			["upload", "upload", __("Upload a bill"), this.has("accounting") || this.has("purchase")],
+			["purchase-bill", "file-plus", __("New purchase bill"), this.has("purchase")],
+			["pay", "send", __("Pay supplier"), this.has("purchase")],
+			["new-supplier", "truck", __("Add supplier"), this.has("purchase")],
+			["stock-in", "arrow-down", __("Stock in"), this.has("inventory")],
+			["stock-out", "arrow-up", __("Stock out"), this.has("inventory")],
+			["stock-count", "list", __("Stock count"), this.has("inventory")],
 		].filter((a) => a[3]);
 		const cards = [
 			[__("Sales this month"), inr(n.sales_month)],
@@ -56,6 +62,8 @@ class MyBusiness {
 			[__("Received this month"), inr(n.received_month)],
 		];
 		if (this.has("accounting")) cards.push([__("Expenses this month"), inr(n.expenses_month)]);
+		if (this.has("purchase")) cards.push([__("Money to pay"), inr(n.to_pay)]);
+		if (this.has("inventory")) cards.push([__("Stock value"), inr(n.stock_value)]);
 
 		const status = (r) => {
 			if (r.docstatus === 0) return `<span class="mb-pill mb-grey">${__("Draft")}</span>`;
@@ -97,6 +105,7 @@ class MyBusiness {
 			<div class="mb-cards">${cards.map((c) => `<div class="mb-card"><div class="mb-card-label">${c[0]}</div><div class="mb-card-value">${c[1]}</div></div>`).join("")}</div>
 			${reports}
 			${this.uploads_html()}
+			${this.bills_html()}
 			<div class="mb-section">
 				<div class="mb-section-head"><h4>${__("Recent invoices")}</h4>
 					<span><a href="/app/sales-invoice">${__("All invoices")}</a> · <a href="/app/quotation">${__("Quotes")}</a> ·
@@ -118,11 +127,22 @@ class MyBusiness {
 				"new-product": () => this.product_dialog(),
 				expense: () => this.expense_dialog(),
 				upload: () => this.upload_dialog(),
+				"purchase-bill": () => this.purchase_dialog(),
+				pay: () => this.pay_dialog(),
+				"new-supplier": () => this.supplier_dialog(),
+				"stock-in": () => this.stock_dialog("in"),
+				"stock-out": () => this.stock_dialog("out"),
+				"stock-count": () => this.stock_dialog("count"),
 				address: () => this.address_dialog(),
 			})[act]();
 		});
 		this.$body.find("[data-receive]").on("click", (e) => this.receive_dialog($(e.currentTarget).attr("data-receive")));
 		this.$body.find("[data-enter]").on("click", (e) => this.enter_upload_dialog($(e.currentTarget).attr("data-enter")));
+		this.$body.find("[data-enter-bill]").on("click", (e) => {
+			const up = (this.data.uploads || []).find((u) => u.name === $(e.currentTarget).attr("data-enter-bill")) || {};
+			this.purchase_dialog(up);
+		});
+		this.$body.find("[data-pay]").on("click", (e) => this.pay_dialog($(e.currentTarget).attr("data-pay")));
 	}
 
 	async options() {
@@ -357,7 +377,9 @@ class MyBusiness {
 				<td class="text-right">${u.amount ? inr(u.amount) : ""}</td>
 				<td>${pill(u.status)}</td>
 				<td class="text-right">${u.status === "New" && this.has("accounting")
-					? `<button class="btn btn-xs btn-primary" data-enter="${frappe.utils.escape_html(u.name)}">${__("Enter as expense")}</button>` : ""}</td>
+					? `<button class="btn btn-xs btn-primary" data-enter="${frappe.utils.escape_html(u.name)}">${__("Enter as expense")}</button>` : ""}
+					${u.status === "New" && this.has("purchase")
+					? `<button class="btn btn-xs btn-default" data-enter-bill="${frappe.utils.escape_html(u.name)}">${__("Enter as purchase bill")}</button>` : ""}</td>
 			</tr>`).join("")}</tbody></table>
 			<div class="text-muted small">${__("Your CA team can also enter these for you.")}</div></div>`;
 	}
@@ -402,6 +424,159 @@ class MyBusiness {
 					args: { upload: name, category: v.category, amount: v.amount, paid_from: v.paid_from, expense_date: v.date } });
 				d.hide();
 				frappe.show_alert({ message: __("Expense saved"), indicator: "green" });
+				this.load();
+			},
+		});
+		d.show();
+	}
+
+	// ---------------------------------------------------------------- purchase
+	bills_html() {
+		const bills = this.data.bills || [];
+		if (!this.has("purchase")) return "";
+		const pill = (b) => b.docstatus !== 1 ? `<span class="mb-pill mb-grey">${__("Draft")}</span>`
+			: b.outstanding_amount <= 0 ? `<span class="mb-pill mb-green">${__("Paid")}</span>`
+			: `<span class="mb-pill mb-orange">${__("To pay")} ${inr(b.outstanding_amount)}</span>`;
+		return `<div class="mb-section mb-gap"><div class="mb-section-head"><h4>${__("Purchase bills")}</h4>
+			<span><a href="/app/purchase-invoice">${__("All purchase bills")}</a> · <a href="/app/supplier">${__("Suppliers")}</a></span></div>
+			${bills.length ? `<table class="table mb-table"><tbody>${bills.map((b) => `<tr>
+				<td><a href="/app/purchase-invoice/${encodeURIComponent(b.name)}">${frappe.utils.escape_html(b.name)}</a></td>
+				<td>${frappe.utils.escape_html(b.supplier_name || "")}${b.bill_no ? ` <span class="text-muted small">#${frappe.utils.escape_html(b.bill_no)}</span>` : ""}</td>
+				<td>${frappe.datetime.str_to_user(b.posting_date)}</td>
+				<td class="text-right">${inr(b.grand_total)}</td><td>${pill(b)}</td>
+				<td class="text-right">${b.docstatus === 1 && b.outstanding_amount > 0
+					? `<button class="btn btn-xs btn-primary" data-pay="${frappe.utils.escape_html(b.name)}">${__("Pay")}</button>` : ""}</td>
+			</tr>`).join("")}</tbody></table>` : `<div class="mb-empty">${__("No purchase bills yet.")}</div>`}</div>`;
+	}
+
+	async supplier_dialog(done) {
+		const o = await this.options();
+		const d = new frappe.ui.Dialog({
+			title: __("Add supplier"),
+			fields: [
+				{ fieldname: "supplier_name", label: __("Name"), fieldtype: "Data", reqd: 1 },
+				{ fieldname: "gstin", label: __("GSTIN (if registered)"), fieldtype: "Data", length: 15 },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "phone", label: __("Mobile"), fieldtype: "Data" },
+				{ fieldname: "email", label: __("Email"), fieldtype: "Data", options: "Email" },
+				{ fieldtype: "Section Break", label: __("Address") },
+				{ fieldname: "address_line1", label: __("Address"), fieldtype: "Data" },
+				{ fieldname: "city", label: __("City"), fieldtype: "Data" },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "state", label: __("State"), fieldtype: o.states.length ? "Select" : "Data", options: ["", ...o.states].join("\n") },
+				{ fieldname: "pincode", label: __("PIN code"), fieldtype: "Data", length: 6 },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				const r = await frappe.call({ method: API + "create_supplier", freeze: true, args: v });
+				d.hide();
+				frappe.show_alert({ message: __("Saved"), indicator: "green" });
+				done ? done(r.message) : this.load();
+			},
+		});
+		d.show();
+	}
+
+	purchase_dialog(upload) {
+		upload = upload || {};
+		const d = new frappe.ui.Dialog({
+			title: __("New purchase bill"),
+			size: "large",
+			fields: [
+				{ fieldname: "supplier", label: __("Supplier"), fieldtype: "Link", options: "Supplier", reqd: 1,
+				  description: `<a href="#" class="mb-add-supplier">${__("+ Add a new supplier")}</a>` },
+				{ fieldname: "bill_no", label: __("Supplier's bill number"), fieldtype: "Data" },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "bill_date", label: __("Bill date"), fieldtype: "Date", reqd: 1, default: upload.bill_date || frappe.datetime.get_today() },
+				{ fieldname: "due_days", label: __("Pay within (days)"), fieldtype: "Int", default: 30 },
+				{ fieldname: "update_stock", label: __("Add these to my stock"), fieldtype: "Check", default: this.has("inventory") ? 1 : 0,
+				  hidden: this.has("inventory") ? 0 : 1 },
+				{ fieldtype: "Section Break" },
+				{ fieldname: "items", label: __("What you bought"), fieldtype: "Table", reqd: 1, in_place_edit: true, data: [{ qty: 1 }], fields: [
+					{ fieldname: "item_code", label: __("Product or service"), fieldtype: "Link", options: "Item", in_list_view: 1, reqd: 1, columns: 5 },
+					{ fieldname: "qty", label: __("Qty"), fieldtype: "Float", default: 1, in_list_view: 1, columns: 2 },
+					{ fieldname: "rate", label: __("Rate"), fieldtype: "Currency", in_list_view: 1, columns: 3 },
+				] },
+				{ fieldname: "add_product", fieldtype: "HTML", options: `<a href="#" class="mb-add-product">${__("+ Add a new product or service")}</a>` },
+				{ fieldname: "hint", fieldtype: "HTML", options: upload.name ? `<div class="text-muted small">${__("From uploaded bill")} ${frappe.utils.escape_html(upload.name)} · <a target="_blank" href="${upload.bill_file}">${__("View")}</a></div>` : "" },
+			],
+			primary_action_label: __("Save bill"),
+			primary_action: async (v) => {
+				const r = await frappe.call({ method: API + "create_purchase_bill", freeze: true,
+					args: { supplier: v.supplier, items: (v.items || []).filter((i) => i.item_code), bill_no: v.bill_no,
+						bill_date: v.bill_date, due_days: v.due_days, upload: upload.name, update_stock: v.update_stock } });
+				d.hide();
+				frappe.show_alert({ message: `${__("Purchase bill")} ${r.message.name} · ${inr(r.message.grand_total)}`, indicator: "green" });
+				this.load();
+			},
+		});
+		d.$wrapper.find(".mb-add-supplier").on("click", (e) => { e.preventDefault(); this.supplier_dialog((s) => d.set_value("supplier", s.name)); });
+		d.$wrapper.find(".mb-add-product").on("click", (e) => {
+			e.preventDefault();
+			this.product_dialog((p) => {
+				const grid = d.fields_dict.items.grid; const rows = grid.get_data();
+				const empty = rows.find((r) => !r.item_code);
+				if (empty) Object.assign(empty, { item_code: p.name, qty: 1, rate: p.rate }); else rows.push({ item_code: p.name, qty: 1, rate: p.rate });
+				grid.refresh();
+			});
+		});
+		d.show();
+	}
+
+	pay_dialog(bill) {
+		const d = new frappe.ui.Dialog({
+			title: __("Pay supplier"),
+			fields: [
+				{ fieldname: "bill", label: __("Purchase bill"), fieldtype: "Link", options: "Purchase Invoice", reqd: 1, default: bill,
+				  get_query: () => ({ filters: { docstatus: 1, outstanding_amount: [">", 0] } }),
+				  onchange: () => {
+					const b = d.get_value("bill");
+					b && frappe.db.get_value("Purchase Invoice", b, ["outstanding_amount", "supplier_name"]).then((r) => {
+						d.set_value("amount", r.message.outstanding_amount);
+						d.set_df_property("amount", "description", `${r.message.supplier_name} · ${__("due")} ${inr(r.message.outstanding_amount)}`);
+					});
+				  } },
+				{ fieldname: "amount", label: __("Amount paid"), fieldtype: "Currency", reqd: 1 },
+				{ fieldname: "mode", label: __("How did you pay?"), fieldtype: "Select", options: ["Bank transfer", "UPI", "Cheque", "Cash"].join("\n"), default: "Bank transfer" },
+				{ fieldname: "reference", label: __("UTR / cheque no. (optional)"), fieldtype: "Data", depends_on: "eval:doc.mode!='Cash'" },
+				{ fieldname: "date", label: __("Date paid"), fieldtype: "Date", default: frappe.datetime.get_today() },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				await frappe.call({ method: API + "pay_supplier", freeze: true,
+					args: { bill: v.bill, amount: v.amount, mode: v.mode, payment_date: v.date, reference: v.reference } });
+				d.hide();
+				frappe.show_alert({ message: __("Payment saved"), indicator: "green" });
+				this.load();
+			},
+		});
+		d.show();
+		if (bill) d.fields_dict.bill.df.onchange();
+	}
+
+	// ---------------------------------------------------------------- stock
+	async stock_dialog(kind) {
+		const stock = (await frappe.call({ method: API + "stock_list" })).message || [];
+		const titles = { in: __("Stock in"), out: __("Stock out"), count: __("Stock count") };
+		const table = stock.length ? `<table class="table table-sm mb-table"><thead><tr><th>${__("Product")}</th><th class="text-right">${__("In hand")}</th></tr></thead><tbody>
+			${stock.slice(0, 12).map((s) => `<tr><td>${frappe.utils.escape_html(s.item_name)}</td><td class="text-right">${s.in_hand} ${frappe.utils.escape_html(s.unit || "")}</td></tr>`).join("")}</tbody></table>` : "";
+		const d = new frappe.ui.Dialog({
+			title: titles[kind],
+			fields: [
+				{ fieldname: "item_code", label: __("Product"), fieldtype: "Link", options: "Item", reqd: 1 },
+				{ fieldname: "qty", label: kind === "count" ? __("Quantity you counted") : __("Quantity"), fieldtype: "Float", reqd: 1 },
+				{ fieldname: "rate", label: __("Cost per unit (optional)"), fieldtype: "Currency", hidden: kind === "out" ? 1 : 0 },
+				{ fieldname: "date", label: __("Date"), fieldtype: "Date", default: frappe.datetime.get_today() },
+				{ fieldname: "note", label: __("Note (optional)"), fieldtype: "Data", hidden: kind === "count" ? 1 : 0 },
+				{ fieldname: "now", fieldtype: "HTML", options: table },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				const r = kind === "count"
+					? await frappe.call({ method: API + "stock_count", freeze: true, args: { item_code: v.item_code, counted_qty: v.qty, rate: v.rate, count_date: v.date } })
+					: await frappe.call({ method: API + "stock_move", freeze: true, args: { item_code: v.item_code, qty: v.qty, direction: kind, rate: v.rate, move_date: v.date, note: v.note } });
+				d.hide();
+				frappe.show_alert({ message: `${__("Saved")} · ${__("In hand")}: ${r.message.in_hand}`, indicator: "green" });
 				this.load();
 			},
 		});

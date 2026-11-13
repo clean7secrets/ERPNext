@@ -9,7 +9,7 @@ import re
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, get_first_day, getdate, nowdate
+from frappe.utils import add_days, cint, flt, get_first_day, getdate, nowdate, nowtime
 
 from rpa_integration.printing import LAYOUTS
 
@@ -74,6 +74,16 @@ def dashboard():
 			join `tabAccount` acc on acc.name = gle.account
 			where gle.company=%s and gle.is_cancelled=0 and acc.root_type='Expense'
 			and gle.posting_date between %s and %s""", company, month_start, today)
+	if "purchase" in features:
+		numbers["to_pay"] = q("""select sum(outstanding_amount) from `tabPurchase Invoice` where company=%s
+			and docstatus=1 and outstanding_amount > 0""", company)
+	if "inventory" in features:
+		numbers["stock_value"] = q("""select sum(b.stock_value) from `tabBin` b join `tabWarehouse` w on w.name=b.warehouse
+			where w.company=%s""", company)
+	bills = frappe.get_all("Purchase Invoice", filters={"company": company},
+	                        fields=["name", "supplier_name", "bill_no", "posting_date", "grand_total", "outstanding_amount",
+	                                "status", "docstatus"], order_by="creation desc", limit_page_length=6) \
+		if "purchase" in features else []
 	recent = frappe.get_list("Sales Invoice", filters={"company": company},
 	                         fields=["name", "customer_name", "posting_date", "grand_total", "outstanding_amount",
 	                                 "status", "docstatus", "is_return"],
@@ -86,7 +96,7 @@ def dashboard():
 	                          order_by="creation desc", limit_page_length=6) \
 		if set(features) & {"accounting", "purchase"} else []
 	user = frappe.get_cached_doc("User", frappe.session.user)
-	return {"uploads": uploads, "lang": user.language or "en",
+	return {"uploads": uploads, "bills": bills, "lang": user.language or "en",
 		"company": company, "features": features, "numbers": numbers, "recent": recent, "quotes": quotes,
 		"first_name": user.first_name, "has_address": bool(_company_address(company)),
 		"customers": frappe.db.count("Customer", {"rpa_company": company}),
@@ -164,7 +174,9 @@ def create_product(item_name, rate=0, hsn=None, gst_rate=18, unit="Nos", is_serv
 		code = f"{base}-{n}"
 	doc = frappe.get_doc({"doctype": "Item", "item_code": code, "item_name": item_name, "description": item_name,
 	                      "item_group": _leaf("Item Group", prefer="Services" if cint(is_service) else "Products"),
-	                      "stock_uom": unit or "Nos", "is_stock_item": 0, "include_item_in_manufacturing": 0,
+	                      "stock_uom": unit or "Nos",
+	                      "is_stock_item": 1 if ("inventory" in _features(company) and not cint(is_service)) else 0,
+	                      "include_item_in_manufacturing": 0,
 	                      "gst_hsn_code": (hsn or "").strip() or None, "rpa_company": company,
 	                      "standard_rate": flt(rate)})
 	template = f"GST {cint(gst_rate)}% - {abbr}"
@@ -182,12 +194,14 @@ def _leaf(doctype, prefer=None):
 
 # ------------------------------------------------------------------ invoices, quotes, payments
 
-def _lines(items):
+def _lines(items, own=None):
 	items = json.loads(items) if isinstance(items, str) else items
 	rows = []
 	for it in items or []:
 		if not it.get("item_code") or flt(it.get("qty")) <= 0:
 			continue
+		if own and frappe.db.get_value("Item", it["item_code"], "rpa_company") != own:
+			frappe.throw(_("Please pick one of your products"), frappe.PermissionError)
 		rows.append({"item_code": it["item_code"], "qty": flt(it["qty"]), "rate": flt(it.get("rate")),
 		             "discount_percentage": flt(it.get("discount"))})
 	if not rows:
@@ -199,10 +213,13 @@ def _lines(items):
 def create_invoice(customer, items, posting_date=None, due_days=15, notes=None, finalise=1):
 	company = client_company()
 	posting_date = posting_date or nowdate()
+	lines = _lines(items)
+	stock = "inventory" in _features(company) and any(
+		frappe.db.get_value("Item", r["item_code"], "is_stock_item") for r in lines)
 	doc = frappe.get_doc({"doctype": "Sales Invoice", "company": company, "customer": customer,
-	                      "posting_date": posting_date, "set_posting_time": 1,
-	                      "due_date": add_days(posting_date, cint(due_days)), "items": _lines(items),
-	                      "terms": notes or None})
+	                      "posting_date": posting_date, "set_posting_time": 1, "posting_time": nowtime(),
+	                      "due_date": add_days(posting_date, cint(due_days)), "items": lines,
+	                      "terms": notes or None, "update_stock": 1 if stock else 0})
 	doc.set_missing_values()
 	doc.insert()
 	if cint(finalise):
@@ -377,3 +394,217 @@ def save_address(address_line1, city, state, pincode, phone=None):
 	gstin = frappe.db.get_value("Company", company, "gstin") if frappe.get_meta("Company").has_field("gstin") else None
 	name = ensure_company_address(company, address_line1, city, state, pincode, gstin=gstin, phone=phone)
 	return {"address": name}
+
+
+# ------------------------------------------------------------------ purchase (feature "purchase")
+
+def _as_client_doc(doc, company):
+	"""Insert on the client's behalf: the company is always theirs, checked above."""
+	doc.company = company
+	doc.flags.ignore_permissions = True
+	return doc
+
+
+@frappe.whitelist()
+def create_supplier(supplier_name, gstin=None, phone=None, email=None, address_line1=None, city=None,
+                    state=None, pincode=None):
+	company = client_company()
+	if not set(_features(company)) & {"purchase", "accounting"}:
+		frappe.throw(_("Suppliers come with the Purchase plan."), frappe.PermissionError)
+	supplier_name = (supplier_name or "").strip()
+	if len(supplier_name) < 2:
+		frappe.throw(_("Please enter the supplier's name"))
+	gstin = (gstin or "").strip().upper() or None
+	doc = frappe.get_doc({"doctype": "Supplier", "supplier_name": supplier_name, "rpa_company": company,
+	                      "supplier_type": "Company" if gstin else "Individual",
+	                      "supplier_group": _leaf("Supplier Group", prefer="Local"),
+	                      "mobile_no": phone, "email_id": email,
+	                      "gstin": gstin, "gst_category": "Registered Regular" if gstin else "Unregistered"})
+	doc.flags.ignore_permissions = True
+	doc.insert()
+	if address_line1 and city and state:
+		frappe.get_doc({"doctype": "Address", "address_title": supplier_name, "address_type": "Billing",
+		                "address_line1": address_line1, "city": city, "state": state, "pincode": pincode,
+		                "country": "India", "gstin": gstin, "gst_category": doc.gst_category,
+		                "is_primary_address": 1, "rpa_company": company,
+		                "links": [{"link_doctype": "Supplier", "link_name": doc.name}]}).insert(ignore_permissions=True)
+	return {"name": doc.name, "supplier_name": doc.supplier_name}
+
+
+@frappe.whitelist()
+def create_purchase_bill(supplier, items, bill_no=None, bill_date=None, due_days=30, upload=None, update_stock=0):
+	company = client_company()
+	_require(company, "purchase")
+	if frappe.db.get_value("Supplier", supplier, "rpa_company") != company:
+		frappe.throw(_("Please pick one of your suppliers"), frappe.PermissionError)
+	bill_date = bill_date or nowdate()
+	doc = frappe.get_doc({"doctype": "Purchase Invoice", "supplier": supplier, "bill_no": (bill_no or "").strip() or None,
+	                      "bill_date": bill_date, "posting_date": nowdate(), "set_posting_time": 1, "posting_time": nowtime(),
+	                      "due_date": add_days(bill_date, cint(due_days)), "items": _lines(items, own=company),
+	                      "update_stock": 1 if cint(update_stock) and "inventory" in _features(company) else 0})
+	_as_client_doc(doc, company)
+	# GST (input credit) only on bills from GST-registered suppliers; India Compliance refuses it otherwise.
+	registered = bool(frappe.db.get_value("Supplier", supplier, "gstin"))
+	default_tax = frappe.db.get_value("Purchase Taxes and Charges Template", {"company": company, "is_default": 1}, "name")
+	if registered and default_tax:
+		doc.taxes_and_charges = default_tax
+	doc.set_missing_values()
+	if not registered:
+		doc.taxes_and_charges = None
+		doc.set("taxes", [])
+		for it in doc.items:
+			it.item_tax_template = None
+			it.item_tax_rate = "{}"
+	elif default_tax and not doc.get("taxes"):
+		doc.set_taxes() if hasattr(doc, "set_taxes") else None
+	doc.insert()
+	doc.submit()
+	if upload:
+		up = frappe.get_doc("RPA Bill Upload", upload)
+		if up.company == company and up.status == "New":
+			frappe.db.set_value("RPA Bill Upload", up.name, {"status": "Entered", "entered_as_doctype": "Purchase Invoice",
+			                                                 "entered_as": doc.name})
+			frappe.get_doc({"doctype": "File", "file_url": up.bill_file, "attached_to_doctype": "Purchase Invoice",
+			                "attached_to_name": doc.name, "is_private": 1}).insert(ignore_permissions=True)
+	return {"name": doc.name, "grand_total": doc.grand_total}
+
+
+@frappe.whitelist()
+def pay_supplier(bill, amount=None, mode="Bank transfer", payment_date=None, reference=None):
+	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+
+	company = client_company()
+	_require(company, "purchase")
+	pi = frappe.get_doc("Purchase Invoice", bill)
+	if pi.company != company:
+		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	amount = flt(amount) or flt(pi.outstanding_amount)
+	if amount <= 0 or amount > flt(pi.outstanding_amount) + 0.01:
+		frappe.throw(_("Amount must be between 1 and the amount due ({0})").format(pi.outstanding_amount))
+	pe = get_payment_entry("Purchase Invoice", bill)
+	pe.posting_date = payment_date or nowdate()
+	field = "default_cash_account" if mode == "Cash" else "default_bank_account"
+	paid_from = frappe.get_cached_value("Company", company, field)
+	if paid_from:
+		pe.paid_from = paid_from
+	if mode != "Cash":
+		pe.reference_no = reference or mode
+		pe.reference_date = pe.posting_date
+	pe.paid_amount = pe.received_amount = amount
+	for ref in pe.references:
+		ref.allocated_amount = amount
+	_as_client_doc(pe, company)
+	pe.insert()
+	pe.submit()
+	return {"name": pe.name, "amount": amount}
+
+
+# ------------------------------------------------------------------ stock (feature "inventory")
+
+def _store(company):
+	abbr = frappe.get_cached_value("Company", company, "abbr")
+	name = f"Stores - {abbr}"
+	if frappe.db.exists("Warehouse", name):
+		return name
+	return frappe.db.get_value("Warehouse", {"company": company, "is_group": 0}, "name")
+
+
+@frappe.whitelist()
+def stock_move(item_code, qty, direction="in", rate=None, move_date=None, note=None):
+	company = client_company()
+	_require(company, "inventory")
+	if frappe.db.get_value("Item", item_code, "rpa_company") != company:
+		frappe.throw(_("Please pick one of your products"), frappe.PermissionError)
+	if not frappe.db.get_value("Item", item_code, "is_stock_item"):
+		frappe.db.set_value("Item", item_code, "is_stock_item", 1)
+	qty = flt(qty)
+	if qty <= 0:
+		frappe.throw(_("Please enter the quantity"))
+	store = _store(company)
+	uom = frappe.db.get_value("Item", item_code, "stock_uom")
+	row = {"item_code": item_code, "qty": qty, "uom": uom, "stock_uom": uom, "conversion_factor": 1, "transfer_qty": qty}
+	if direction == "in":
+		purpose, row["t_warehouse"] = "Material Receipt", store
+		if flt(rate):
+			row["basic_rate"] = flt(rate)
+	else:
+		purpose, row["s_warehouse"] = "Material Issue", store
+	se = frappe.get_doc({"doctype": "Stock Entry", "stock_entry_type": purpose, "purpose": purpose,
+	                     "posting_date": move_date or nowdate(), "set_posting_time": 1, "posting_time": nowtime(), "remarks": note,
+	                     "items": [row]})
+	_as_client_doc(se, company)
+	se.set_missing_values() if hasattr(se, "set_missing_values") else None
+	se.insert()
+	se.submit()
+	return {"name": se.name, "in_hand": _in_hand(item_code, store)}
+
+
+@frappe.whitelist()
+def stock_count(item_code, counted_qty, rate=None, count_date=None):
+	company = client_company()
+	_require(company, "inventory")
+	if frappe.db.get_value("Item", item_code, "rpa_company") != company:
+		frappe.throw(_("Please pick one of your products"), frappe.PermissionError)
+	if not frappe.db.get_value("Item", item_code, "is_stock_item"):
+		frappe.db.set_value("Item", item_code, "is_stock_item", 1)
+	store = _store(company)
+	valuation = flt(rate) or flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": store}, "valuation_rate")) \
+		or flt(frappe.db.get_value("Item", item_code, "valuation_rate")) or flt(frappe.db.get_value("Item", item_code, "standard_rate")) or 1
+	sr = frappe.get_doc({"doctype": "Stock Reconciliation", "purpose": "Stock Reconciliation",
+	                     "posting_date": count_date or nowdate(), "set_posting_time": 1, "posting_time": nowtime(),
+	                     "items": [{"item_code": item_code, "warehouse": store, "qty": flt(counted_qty),
+	                                "valuation_rate": valuation}]})
+	_as_client_doc(sr, company)
+	sr.insert()
+	sr.submit()
+	return {"name": sr.name, "in_hand": _in_hand(item_code, store)}
+
+
+def _in_hand(item_code, store):
+	return flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": store}, "actual_qty"))
+
+
+@frappe.whitelist()
+def stock_list():
+	company = client_company()
+	_require(company, "inventory")
+	store = _store(company)
+	return frappe.db.sql("""select i.name as item_code, i.item_name, i.stock_uom as unit,
+		coalesce(b.actual_qty, 0) as in_hand, coalesce(b.stock_value, 0) as value
+		from `tabItem` i left join `tabBin` b on b.item_code = i.name and b.warehouse = %s
+		where i.rpa_company = %s and i.is_stock_item = 1 and i.disabled = 0
+		order by i.item_name limit 200""", (store, company), as_dict=True)
+
+
+# ------------------------------------------------------------------ CA team review
+
+@frappe.whitelist()
+def team_overview():
+	"""One row per client company the team member may see (their User Permissions, or all for admins)."""
+	if is_client():
+		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	user = frappe.session.user
+	allowed = frappe.get_all("User Permission", filters={"user": user, "allow": "Company"}, pluck="for_value")
+	filters = {"rpa_portal_user": ["is", "set"]}
+	if allowed:
+		filters["name"] = ["in", allowed]
+	elif "System Manager" not in frappe.get_roles(user):
+		return []
+	out = []
+	for c in frappe.get_all("Company", filters=filters, fields=["name", "rpa_enabled_features"], order_by="name"):
+		n = lambda sql: (frappe.db.sql(sql, c.name) or [[0]])[0][0] or 0
+		last = frappe.db.sql("""select max(creation) from (
+			select creation from `tabSales Invoice` where company=%(c)s union all
+			select creation from `tabPurchase Invoice` where company=%(c)s union all
+			select creation from `tabJournal Entry` where company=%(c)s union all
+			select creation from `tabPayment Entry` where company=%(c)s) t""", {"c": c.name})
+		out.append({
+			"company": c.name, "features": json.loads(c.rpa_enabled_features or "[]"),
+			"uploads_new": n("select count(*) from `tabRPA Bill Upload` where company=%s and status='New'"),
+			"drafts": n("select count(*) from `tabSales Invoice` where company=%s and docstatus=0"),
+			"overdue": n("select count(*) from `tabSales Invoice` where company=%s and docstatus=1 and outstanding_amount>0 and due_date<curdate()"),
+			"to_collect": flt(n("select sum(outstanding_amount) from `tabSales Invoice` where company=%s and docstatus=1")),
+			"to_pay": flt(n("select sum(outstanding_amount) from `tabPurchase Invoice` where company=%s and docstatus=1")),
+			"last_entry": last[0][0] if last and last[0][0] else None,
+		})
+	return out

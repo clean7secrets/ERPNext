@@ -1,0 +1,5 @@
+.cr-wrap { max-width: 1200px; margin: 0 auto; padding: 8px 4px 40px; }
+.cr-table { background: #fff; border-radius: 12px; }
+.cr-table th { color: #003366; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+.cr-table td { vertical-align: middle; font-size: 13px; }
+.cr-table a { color: #003366; font-weight: 600; }

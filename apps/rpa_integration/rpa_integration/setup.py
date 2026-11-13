@@ -41,6 +41,10 @@ def ensure_setup():
 	_grant("RPA Invoicing", INVOICING_FULL, None)
 	_grant("RPA Invoicing", INVOICING_READ, ["read", "report"])
 	_grant(READ_ONLY_ROLE, READ_ONLY_DOCTYPES, ["read", "print", "report", "export"])
+	# Purchase plan: clients see and print their purchase bills and supplier payments.
+	_grant("Purchase User", ["Purchase Invoice", "Payment Entry"], ["read", "print", "report"])
+	_grant("Stock User", ["Stock Entry", "Bin"], ["read", "print", "report"])
+	_grant("Stock User", ["Stock Reconciliation"], ["read", "write", "create", "submit", "print", "report"])
 
 	create_custom_fields({
 		"Company": [
