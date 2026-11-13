@@ -1,0 +1,256 @@
+{#- Online Books invoice. One template, seven layouts. Tables only: wkhtmltopdf has no flexbox/grid. -#}
+{%- set c = colour -%}
+<style>
+  .bk, .bk table { font-family: {{ font }}; color: #1f2933; }
+  .bk { font-size: 9.5pt; line-height: 1.35; }
+  .bk table { width: 100%; border-collapse: collapse; }
+  .bk td, .bk th { vertical-align: top; padding: 4px 6px; font-size: 9.5pt; }
+  .bk th { text-align: left; font-weight: 600; }
+  .bk .r { text-align: right; } .bk .ctr { text-align: center; } .bk .nw { white-space: nowrap; }
+  .bk .muted { color: #5f6b7a; } .bk .small { font-size: 8pt; }
+  .bk .pre { white-space: pre-line; }
+  .bk .title { font-size: 16pt; font-weight: 700; color: {{ c }}; letter-spacing: .5px; }
+  .bk .seller { font-size: 13pt; font-weight: 700; }
+  .bk .l2 { font-weight: 400; color: #5f6b7a; font-size: 90%; }
+  .bk .logo { max-height: 60px; max-width: 180px; margin-bottom: 6px; }
+  .bk .sig { max-height: 50px; max-width: 160px; }
+  .bk .gap { height: 10px; }
+  .bk .items th { color: #fff; background: {{ c }}; }
+  .bk .items td { border-bottom: 1px solid #e3e8ef; }
+  .bk .totals td { padding: 3px 6px; }
+  .bk .grand td { font-size: 11pt; font-weight: 700; border-top: 2px solid {{ c }}; color: {{ c }}; }
+  .bk .box { border: 1px solid #c9d2dd; }
+  .bk .lbl { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .6px; color: #5f6b7a; font-weight: 600; }
+  .bk .hsn th { background: #f3f5f8; color: #1f2933; border: 1px solid #d7dde5; font-size: 8pt; }
+  .bk .hsn td { border: 1px solid #d7dde5; font-size: 8pt; }
+  .bk .lh-img { width: 100%; }
+  .bk .qr { width: 96px; height: 96px; }
+
+{% if layout in ('classic', 'bilingual', 'letterhead') %}
+  .bk .frame { border: 1px solid #8a96a3; }
+  .bk .frame > tbody > tr > td { border-bottom: 1px solid #8a96a3; }
+  .bk .items th { background: #eef2f7; color: #1f2933; border: 1px solid #8a96a3; }
+  .bk .items td { border: 1px solid #8a96a3; border-top: 0; border-bottom: 0; }
+  .bk .items tr.last td { border-bottom: 1px solid #8a96a3; }
+  .bk .title { color: #1f2933; text-transform: uppercase; font-size: 14pt; }
+  .bk .grand td { color: #1f2933; border-top: 1px solid #1f2933; }
+{% elif layout == 'modern' %}
+  .bk .band { background: {{ c }}; color: #fff; }
+  .bk .band .title, .bk .band .seller, .bk .band .muted { color: #fff; }
+  .bk .band td { padding: 14px 16px; color: #fff; }
+  .bk .band .meta td { padding: 2px 0; color: #fff; }
+  .bk .band .lbl { color: #c4dafb; }
+  .bk .items td { border-bottom: 1px solid #e3e8ef; }
+  .bk .items tr.alt td { background: {{ tint }}; }
+  .bk .grandbox { background: {{ c }}; color: #fff; padding: 10px 14px; font-size: 13pt; font-weight: 700; }
+{% elif layout == 'minimal' %}
+  .bk { font-size: 9.5pt; }
+  .bk .items th { background: none; color: #5f6b7a; border-bottom: 1px solid #1f2933; font-weight: 600; font-size: 8pt; text-transform: uppercase; letter-spacing: .5px; }
+  .bk .items td { border-bottom: 1px solid #eceff3; padding: 7px 6px; }
+  .bk .title { font-size: 22pt; font-weight: 300; color: #1f2933; }
+  .bk .grand td { border-top: 1px solid #1f2933; color: #1f2933; }
+{% elif layout == 'compact' %}
+  .bk { font-size: 8pt; line-height: 1.2; }
+  .bk td, .bk th { padding: 2px 4px; font-size: 8pt; }
+  .bk .items th { font-size: 7.5pt; }
+  .bk .items td { border-bottom: 1px solid #e3e8ef; }
+  .bk .title { font-size: 12pt; }
+  .bk .seller { font-size: 11pt; }
+{% elif layout == 'thermal' %}
+  .bk { font-size: 8.5pt; line-height: 1.3; width: 72mm; margin: 0 auto; }
+  .bk td, .bk .totals td { padding: 1px 0; font-size: 8.5pt; }
+  .bk .dash { border-top: 1px dashed #333; margin: 5px 0; height: 0; }
+  .bk .title { font-size: 11pt; color: #000; }
+  .bk .seller { font-size: 11pt; }
+  .bk .grand td { font-size: 10.5pt; color: #000; border-top: 1px dashed #333; padding-top: 3px; }
+  .bk .qr { width: 110px; height: 110px; }
+{% endif %}
+</style>
+
+<div class="bk {{ layout }}">
+{%- if layout == 'thermal' %}
+  {#- ======================= THERMAL 80 mm ======================= -#}
+  <div class="ctr">
+    {% if logo %}<img class="logo" src="{{ logo }}" style="max-height:40px"><br>{% endif %}
+    <div class="seller">{{ seller.name }}</div>
+    {% if seller.address %}<div class="small pre">{{ seller.address }}</div>{% endif %}
+    {% if seller.gstin %}<div class="small">GSTIN {{ seller.gstin }}</div>{% endif %}
+    {% if seller.phone %}<div class="small">{{ seller.phone }}</div>{% endif %}
+    <div class="dash"></div>
+    <div class="title">{{ L(title) }}</div>
+  </div>
+  <table>
+    <tr><td>{{ L(number_label) }}</td><td class="r">{{ doc.name }}</td></tr>
+    <tr><td>{{ L("Date") }}</td><td class="r">{{ dates.date }}</td></tr>
+    {% if buyer.name %}<tr><td colspan="2">{{ buyer.name }}{% if buyer.gstin %}<br><span class="small">GSTIN {{ buyer.gstin }}</span>{% endif %}</td></tr>{% endif %}
+  </table>
+  <div class="dash"></div>
+  <table>
+    {% for it in items %}
+    <tr><td colspan="2">{{ it.name }}</td></tr>
+    <tr><td class="small muted">{{ it.qty }} × {{ money(it.rate) }}{% if it.gst_rate %} · GST {{ "%g"|format(it.gst_rate) }}%{% endif %}</td><td class="r">{{ money(it.amount) }}</td></tr>
+    {% endfor %}
+  </table>
+  <div class="dash"></div>
+  <table class="totals">
+    {% for label, value in totals.lines %}<tr><td>{{ L(label) }}</td><td class="r">{{ money(value) }}</td></tr>{% endfor %}
+    <tr class="grand"><td>{{ L("Total") }}</td><td class="r">{{ rupees(totals.total) }}</td></tr>
+  </table>
+  {% if upi_qr %}<div class="ctr" style="margin-top:6px"><img class="qr" src="{{ upi_qr.img }}"><div class="small">{{ L("Scan to pay") }} · {{ upi_qr.upi_id }}</div></div>{% endif %}
+  <div class="dash"></div>
+  <div class="ctr small">{{ footer_note or L("Thank you for your business") }}</div>
+
+{%- else %}
+  {#- ======================= A4 LAYOUTS ======================= -#}
+  {% if letterhead_header %}<img class="lh-img" src="{{ letterhead_header }}"><div class="gap"></div>{% endif %}
+
+  {#- ---------- header ---------- -#}
+  {% set seller_block %}
+    {% if logo and not letterhead_header %}<img class="logo" src="{{ logo }}"><br>{% endif %}
+    {% if not letterhead_header %}
+      <div class="seller">{{ seller.name }}</div>
+      {% if seller.address %}<div class="pre {{ 'muted' if layout != 'modern' else '' }}">{{ seller.address }}</div>{% endif %}
+      {% if seller.phone or seller.email %}<div class="muted">{{ seller.phone or "" }}{% if seller.phone and seller.email %} · {% endif %}{{ seller.email or "" }}</div>{% endif %}
+    {% endif %}
+    {% if seller.gstin %}<div><b>GSTIN</b> {{ seller.gstin }}{% if seller.pan %} &nbsp; <b>PAN</b> {{ seller.pan }}{% endif %}</div>{% endif %}
+  {% endset %}
+  {% set meta_block %}
+    <div class="title">{{ L(title) }}</div>
+    <table class="meta" style="width:auto; margin-left:auto; margin-top:4px">
+      <tr><td class="lbl" style="padding:2px 8px 2px 0">{{ L(number_label) }}</td><td class="r nw" style="padding:2px 0"><b>{{ doc.name }}</b></td></tr>
+      <tr><td class="lbl" style="padding:2px 8px 2px 0">{{ L("Date") }}</td><td class="r" style="padding:2px 0">{{ dates.date }}</td></tr>
+      {% if dates.second %}<tr><td class="lbl" style="padding:2px 8px 2px 0">{{ L(dates.second_label) }}</td><td class="r" style="padding:2px 0">{{ dates.second }}</td></tr>{% endif %}
+    </table>
+    {% if irn %}<div class="small" style="margin-top:4px">IRN {{ irn }}</div>{% endif %}
+  {% endset %}
+
+  {% if layout == 'modern' %}
+  <table class="band"><tr><td style="width:60%">{{ seller_block }}</td><td class="r" style="width:40%">{{ meta_block }}</td></tr></table>
+  {% else %}
+  <table class="{{ 'frame' if layout in ('classic','bilingual','letterhead') else '' }}">
+    <tr>
+      <td style="width:60%">{{ seller_block }}</td>
+      <td class="r" style="width:40%">{{ meta_block }}{% if einvoice_qr %}<br><img class="qr" src="{{ einvoice_qr }}">{% endif %}</td>
+    </tr>
+  {% endif %}
+
+  {#- ---------- parties ---------- -#}
+  {% set parties %}
+      <td style="width:{{ '40%' if buyer.shipping else '60%' }}">
+        <div class="lbl">{{ L("Bill To") }}</div>
+        <div style="font-weight:600; font-size:10.5pt">{{ buyer.name }}</div>
+        {% if buyer.address %}<div class="pre">{{ buyer.address }}</div>{% endif %}
+        {% if buyer.gstin %}<div><b>GSTIN</b> {{ buyer.gstin }}</div>{% endif %}
+        {% if buyer.phone %}<div class="muted">{{ buyer.phone }}</div>{% endif %}
+      </td>
+      {% if buyer.shipping %}<td style="width:30%"><div class="lbl">{{ L("Ship To") }}</div><div class="pre">{{ buyer.shipping }}</div></td>{% endif %}
+      <td style="width:{{ '30%' if buyer.shipping else '40%' }}" class="r">
+        {% if buyer.place_of_supply %}<div class="lbl">{{ L("Place of Supply") }}</div><div>{{ buyer.place_of_supply }}</div>{% endif %}
+        {% if reverse_charge %}<div style="margin-top:6px"><b>{{ L("Tax is payable on reverse charge") }}</b></div>{% endif %}
+      </td>
+  {% endset %}
+  {% if layout in ('classic','bilingual','letterhead') %}
+    <tr><td colspan="2" style="padding:0"><table><tr>{{ parties }}</tr></table></td></tr>
+  </table>
+  {% else %}
+    {% if layout != 'modern' %}</table>{% endif %}
+    <div class="gap"></div>
+    <table><tr>{{ parties }}</tr></table>
+    {% if layout == 'modern' and einvoice_qr %}<div class="r"><img class="qr" src="{{ einvoice_qr }}"></div>{% endif %}
+  {% endif %}
+
+  {% if header_note %}<div class="gap"></div><div class="pre">{{ header_note }}</div>{% endif %}
+  <div class="gap"></div>
+
+  {#- ---------- items ---------- -#}
+  <table class="items">
+    <thead><tr>
+      <th style="width:4%">#</th>
+      <th>{{ L("Item") }}</th>
+      {% if show_hsn %}<th style="width:10%">{{ L("HSN/SAC") }}</th>{% endif %}
+      <th class="r" style="width:9%">{{ L("Qty") }}</th>
+      <th class="r" style="width:12%">{{ L("Rate") }}</th>
+      {% if show_discount %}<th class="r" style="width:8%">{{ L("Disc.") }}</th>{% endif %}
+      {% if seller.gstin %}<th class="r" style="width:7%">{{ L("GST") }}</th>{% endif %}
+      <th class="r" style="width:14%">{{ L("Amount") }}</th>
+    </tr></thead>
+    <tbody>
+    {% for it in items %}
+      <tr class="{{ 'alt' if loop.index is even else '' }} {{ 'last' if loop.last else '' }}">
+        <td>{{ it.idx }}</td>
+        <td>{{ it.name }}</td>
+        {% if show_hsn %}<td>{{ it.hsn }}</td>{% endif %}
+        <td class="r">{{ it.qty }}{% if show_uom and it.uom %} <span class="muted small">{{ it.uom }}</span>{% endif %}</td>
+        <td class="r">{{ money(it.rate) }}</td>
+        {% if show_discount %}<td class="r">{{ it.discount }}</td>{% endif %}
+        {% if seller.gstin %}<td class="r">{{ "%g"|format(it.gst_rate) }}%</td>{% endif %}
+        <td class="r">{{ money(it.amount) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  {#- ---------- words, bank, totals ---------- -#}
+  <div class="gap"></div>
+  <table>
+    <tr>
+      <td style="width:55%; padding-left:0">
+        {% if in_words %}<div class="lbl">{{ L("Amount in words") }}</div><div style="margin-bottom:8px">{{ in_words }}</div>{% endif %}
+        {% if bank and not is_quote %}<div class="lbl">{{ L("Bank Details") }}</div><div class="pre" style="margin-bottom:8px">{{ bank }}</div>{% endif %}
+        {% if upi_qr %}
+          <table style="width:auto"><tr>
+            <td style="padding:0 8px 0 0"><img class="qr" src="{{ upi_qr.img }}"></td>
+            <td style="vertical-align:middle"><div class="lbl">{{ L("Scan to pay") }}</div><div>{{ upi_qr.upi_id }}</div><div class="muted small">{{ rupees(upi_qr.amount) }}</div></td>
+          </tr></table>
+        {% endif %}
+      </td>
+      <td style="width:45%; padding-right:0">
+        <table class="totals">
+          {% for label, value in totals.lines %}<tr><td>{{ L(label) }}</td><td class="r nw">{{ money(value) }}</td></tr>{% endfor %}
+          {% if layout == 'modern' %}
+          <tr><td colspan="2" style="padding:6px 0 0 0"><div class="grandbox"><table><tr><td style="color:#fff; padding:0">{{ L("Total") }}</td><td class="r" style="color:#fff; padding:0">{{ rupees(totals.total) }}</td></tr></table></div></td></tr>
+          {% else %}
+          <tr class="grand"><td>{{ L("Total") }}</td><td class="r nw">{{ rupees(totals.total) }}</td></tr>
+          {% endif %}
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  {#- ---------- HSN summary ---------- -#}
+  {% if show_hsn_summary and layout != 'minimal' %}
+  <div class="gap"></div>
+  <div class="lbl" style="margin-bottom:3px">{{ L("HSN/SAC summary") }}</div>
+  <table class="hsn">
+    <tr><th>{{ L("HSN/SAC") }}</th><th class="r">{{ L("Taxable Value") }}</th><th class="r">GST %</th>
+      {% if hsn_rows|selectattr('igst')|list %}<th class="r">IGST</th>{% endif %}
+      {% if hsn_rows|selectattr('cgst')|list %}<th class="r">CGST</th><th class="r">SGST</th>{% endif %}
+      {% if hsn_rows|selectattr('cess')|list %}<th class="r">Cess</th>{% endif %}</tr>
+    {% for h in hsn_rows %}
+    <tr><td>{{ h.hsn }}</td><td class="r">{{ money(h.taxable) }}</td><td class="r">{{ "%g"|format(h.rate) }}%</td>
+      {% if hsn_rows|selectattr('igst')|list %}<td class="r">{{ money(h.igst) }}</td>{% endif %}
+      {% if hsn_rows|selectattr('cgst')|list %}<td class="r">{{ money(h.cgst) }}</td><td class="r">{{ money(h.sgst) }}</td>{% endif %}
+      {% if hsn_rows|selectattr('cess')|list %}<td class="r">{{ money(h.cess) }}</td>{% endif %}</tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {#- ---------- terms and signature ---------- -#}
+  <div class="gap"></div>
+  <table>
+    <tr>
+      <td style="width:60%; padding-left:0">
+        {% if terms %}<div class="lbl">{{ L("Terms and Conditions") }}</div><div class="pre small">{{ terms }}</div>{% endif %}
+      </td>
+      <td style="width:40%; padding-right:0" class="r">
+        <div class="small">For {{ seller.name }}</div>
+        {% if signature %}<img class="sig" src="{{ signature }}">{% else %}<div style="height:44px"></div>{% endif %}
+        <div class="small" style="border-top:1px solid #8a96a3; display:inline-block; padding-top:2px">{{ L("Authorised Signatory") }}</div>
+      </td>
+    </tr>
+  </table>
+
+  {% if footer_note %}<div class="gap"></div><div class="ctr small muted pre">{{ footer_note }}</div>{% endif %}
+  {% if letterhead_footer %}<div class="gap"></div><img class="lh-img" src="{{ letterhead_footer }}">{% endif %}
+{%- endif %}
+</div>

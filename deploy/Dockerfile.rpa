@@ -1,0 +1,9 @@
+FROM rpa-erpnext-base:v16
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-core && rm -rf /var/lib/apt/lists/* && fc-cache -f
+USER frappe
+COPY --chown=frappe:0 rpa_integration /home/frappe/frappe-bench/apps/rpa_integration
+RUN cd /home/frappe/frappe-bench && \
+    ( ./env/bin/python -m pip install --no-cache-dir -e apps/rpa_integration || \
+      uv pip install --python ./env/bin/python -e apps/rpa_integration ) && \
+    ./env/bin/python -c "import rpa_integration, rpa_integration.api; print('rpa_integration', rpa_integration.__version__)"
