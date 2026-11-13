@@ -30,6 +30,8 @@ def ensure():
 	from rpa_integration import branding, phase2
 	branding.ensure()
 	phase2.ensure()
+	from rpa_integration import phase3_words
+	phase3_words.ensure()
 	for company in frappe.get_all("Company", pluck="name"):
 		company_defaults(company)
 

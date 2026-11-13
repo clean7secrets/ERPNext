@@ -27,3 +27,5 @@
 .mb-empty { padding: 20px; text-align: center; color: #5f6b7a; }
 .mb-after { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 @media (max-width: 600px) { .mb-actions { grid-template-columns: repeat(2, 1fr); } .mb-card-value { font-size: 18px; } }
+
+.mb-gap { margin-bottom: 16px; }

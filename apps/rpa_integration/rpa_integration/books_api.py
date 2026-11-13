@@ -81,8 +81,12 @@ def dashboard():
 	quotes = frappe.get_list("Quotation", filters={"company": company},
 	                         fields=["name", "customer_name", "transaction_date", "grand_total", "status", "docstatus"],
 	                         order_by="creation desc", limit_page_length=5)
+	uploads = frappe.get_list("RPA Bill Upload", filters={"company": company},
+	                          fields=["name", "supplier_name", "amount", "status", "bill_date", "bill_file", "creation"],
+	                          order_by="creation desc", limit_page_length=6) \
+		if set(features) & {"accounting", "purchase"} else []
 	user = frappe.get_cached_doc("User", frappe.session.user)
-	return {
+	return {"uploads": uploads, "lang": user.language or "en",
 		"company": company, "features": features, "numbers": numbers, "recent": recent, "quotes": quotes,
 		"first_name": user.first_name, "has_address": bool(_company_address(company)),
 		"customers": frappe.db.count("Customer", {"rpa_company": company}),
@@ -254,6 +258,10 @@ def receive_money(invoice, amount=None, mode="Cash", payment_date=None, referenc
 def record_expense(category, amount, paid_from="Cash", expense_date=None, note=None):
 	company = client_company()
 	_require(company, "accounting")
+	return _expense_entry(company, category, amount, paid_from, expense_date, note)
+
+
+def _expense_entry(company, category, amount, paid_from="Cash", expense_date=None, note=None, ignore_permissions=False):
 	amount = flt(amount)
 	if amount <= 0:
 		frappe.throw(_("Please enter the amount"))
@@ -271,9 +279,59 @@ def record_expense(category, amount, paid_from="Cash", expense_date=None, note=N
 		                      "cost_center": frappe.get_cached_value("Company", company, "cost_center")},
 		                     {"account": paid, "credit_in_account_currency": amount},
 	                     ]})
+	je.flags.ignore_permissions = ignore_permissions
 	je.insert()
 	je.submit()
 	return {"name": je.name, "amount": amount}
+
+
+# ------------------------------------------------------------------ bill uploads ("Snap a bill")
+
+@frappe.whitelist()
+def upload_bill(file_url, bill_date=None, supplier_name=None, amount=None, paid_from=None, note=None):
+	company = client_company()
+	if not set(_features(company)) & {"accounting", "purchase"}:
+		frappe.throw(_("Bill uploads come with the Accounting or Purchase plan."), frappe.PermissionError)
+	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
+	if not file_name:
+		frappe.throw(_("Please attach the bill again"))
+	doc = frappe.get_doc({"doctype": "RPA Bill Upload", "company": company, "bill_file": file_url,
+	                      "bill_date": bill_date or None, "supplier_name": (supplier_name or "").strip() or None,
+	                      "amount": flt(amount) or None, "paid_from": paid_from or None, "note": note})
+	doc.insert()
+	frappe.db.set_value("File", file_name, {"attached_to_doctype": doc.doctype, "attached_to_name": doc.name,
+	                                       "is_private": 1})
+	return {"name": doc.name}
+
+
+@frappe.whitelist()
+def enter_upload_as_expense(upload, category, amount, paid_from="Bank", expense_date=None):
+	doc = frappe.get_doc("RPA Bill Upload", upload)
+	if is_client():
+		if doc.company != client_company():
+			frappe.throw(_("Not permitted"), frappe.PermissionError)
+		_require(doc.company, "accounting")
+	elif not frappe.has_permission("RPA Bill Upload", "write", doc):
+		frappe.throw(_("Not permitted"), frappe.PermissionError)
+	if doc.status != "New":
+		frappe.throw(_("This bill is already entered"))
+	note = " · ".join(x for x in (doc.supplier_name, doc.note, f"Bill {doc.name}") if x)
+	res = _expense_entry(doc.company, category, amount, paid_from, expense_date or doc.bill_date, note)
+	frappe.db.set_value("RPA Bill Upload", doc.name, {"status": "Entered", "entered_as_doctype": "Journal Entry",
+	                                                  "entered_as": res["name"]})
+	if doc.bill_file:
+		frappe.get_doc({"doctype": "File", "file_url": doc.bill_file, "attached_to_doctype": "Journal Entry",
+		                "attached_to_name": res["name"], "is_private": 1}).insert(ignore_permissions=True)
+	return res
+
+
+@frappe.whitelist()
+def set_language(lang):
+	if lang not in ("en", "hi", "mr"):
+		frappe.throw(_("Language not available"))
+	frappe.db.set_value("User", frappe.session.user, "language", lang)
+	frappe.clear_cache(user=frappe.session.user)
+	return lang
 
 
 # ------------------------------------------------------------------ invoice style

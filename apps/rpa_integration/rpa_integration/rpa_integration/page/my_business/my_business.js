@@ -22,6 +22,7 @@ class MyBusiness {
 		this.$body = $body;
 		this.opts = null;
 		page.set_secondary_action(__("Invoice style"), () => this.style_dialog(), "brush");
+		page.add_inner_button(__("Language"), () => this.language_dialog());
 		this.$body.html(`<div class="mb-wrap"><div class="text-muted">${__("Loading your books…")}</div></div>`);
 		this.load();
 	}
@@ -47,6 +48,7 @@ class MyBusiness {
 			["new-customer", "users", __("Add customer"), true],
 			["new-product", "package", __("Add product or service"), true],
 			["expense", "credit-card", __("Record expense"), this.has("accounting")],
+			["upload", "upload", __("Upload a bill"), this.has("accounting") || this.has("purchase")],
 		].filter((a) => a[3]);
 		const cards = [
 			[__("Sales this month"), inr(n.sales_month)],
@@ -94,6 +96,7 @@ class MyBusiness {
 			</div>
 			<div class="mb-cards">${cards.map((c) => `<div class="mb-card"><div class="mb-card-label">${c[0]}</div><div class="mb-card-value">${c[1]}</div></div>`).join("")}</div>
 			${reports}
+			${this.uploads_html()}
 			<div class="mb-section">
 				<div class="mb-section-head"><h4>${__("Recent invoices")}</h4>
 					<span><a href="/app/sales-invoice">${__("All invoices")}</a> · <a href="/app/quotation">${__("Quotes")}</a> ·
@@ -114,10 +117,12 @@ class MyBusiness {
 				"new-customer": () => this.customer_dialog(),
 				"new-product": () => this.product_dialog(),
 				expense: () => this.expense_dialog(),
+				upload: () => this.upload_dialog(),
 				address: () => this.address_dialog(),
 			})[act]();
 		});
 		this.$body.find("[data-receive]").on("click", (e) => this.receive_dialog($(e.currentTarget).attr("data-receive")));
+		this.$body.find("[data-enter]").on("click", (e) => this.enter_upload_dialog($(e.currentTarget).attr("data-enter")));
 	}
 
 	async options() {
@@ -332,6 +337,87 @@ class MyBusiness {
 				await frappe.call({ method: API + "save_address", freeze: true, args: v });
 				d.hide();
 				this.load();
+			},
+		});
+		d.show();
+	}
+
+	// ---------------------------------------------------------------- bill uploads
+	uploads_html() {
+		const ups = this.data.uploads || [];
+		if (!ups.length) return "";
+		const pill = (st) => st === "New" ? `<span class="mb-pill mb-orange">${__("Waiting to be entered")}</span>`
+			: st === "Entered" ? `<span class="mb-pill mb-green">${__("Entered")}</span>` : `<span class="mb-pill mb-grey">${__(st)}</span>`;
+		return `<div class="mb-section mb-gap"><div class="mb-section-head"><h4>${__("Uploaded bills")}</h4>
+			<a href="/app/rpa-bill-upload">${__("All uploads")}</a></div>
+			<table class="table mb-table"><tbody>${ups.map((u) => `<tr>
+				<td><a target="_blank" href="${u.bill_file}">${__("View")}</a></td>
+				<td>${frappe.utils.escape_html(u.supplier_name || __("Bill"))}</td>
+				<td>${u.bill_date ? frappe.datetime.str_to_user(u.bill_date) : ""}</td>
+				<td class="text-right">${u.amount ? inr(u.amount) : ""}</td>
+				<td>${pill(u.status)}</td>
+				<td class="text-right">${u.status === "New" && this.has("accounting")
+					? `<button class="btn btn-xs btn-primary" data-enter="${frappe.utils.escape_html(u.name)}">${__("Enter as expense")}</button>` : ""}</td>
+			</tr>`).join("")}</tbody></table>
+			<div class="text-muted small">${__("Your CA team can also enter these for you.")}</div></div>`;
+	}
+
+	upload_dialog() {
+		const d = new frappe.ui.Dialog({
+			title: __("Upload a bill"),
+			fields: [
+				{ fieldname: "file_url", label: __("Photo or PDF of the bill"), fieldtype: "Attach", reqd: 1 },
+				{ fieldname: "supplier_name", label: __("Paid to (optional)"), fieldtype: "Data" },
+				{ fieldname: "amount", label: __("Amount (optional)"), fieldtype: "Currency" },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "bill_date", label: __("Bill date"), fieldtype: "Date", default: frappe.datetime.get_today() },
+				{ fieldname: "paid_from", label: __("Paid from"), fieldtype: "Select", options: ["", "Cash", "Bank", "Not paid yet"].join("\n") },
+				{ fieldname: "note", label: __("Note (optional)"), fieldtype: "Small Text" },
+			],
+			primary_action_label: __("Upload"),
+			primary_action: async (v) => {
+				await frappe.call({ method: API + "upload_bill", freeze: true, args: v });
+				d.hide();
+				frappe.show_alert({ message: __("Bill uploaded"), indicator: "green" });
+				this.load();
+			},
+		});
+		d.show();
+	}
+
+	async enter_upload_dialog(name) {
+		const o = await this.options();
+		const up = (this.data.uploads || []).find((u) => u.name === name) || {};
+		const d = new frappe.ui.Dialog({
+			title: __("Enter as expense"),
+			fields: [
+				{ fieldname: "category", label: __("What was it for?"), fieldtype: "Select", options: (o.expense_accounts || []).join("\n"), reqd: 1 },
+				{ fieldname: "amount", label: __("Amount"), fieldtype: "Currency", reqd: 1, default: up.amount },
+				{ fieldname: "paid_from", label: __("Paid from"), fieldtype: "Select", options: "Cash\nBank", default: "Bank" },
+				{ fieldname: "date", label: __("Date"), fieldtype: "Date", default: up.bill_date || frappe.datetime.get_today() },
+			],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				await frappe.call({ method: API + "enter_upload_as_expense", freeze: true,
+					args: { upload: name, category: v.category, amount: v.amount, paid_from: v.paid_from, expense_date: v.date } });
+				d.hide();
+				frappe.show_alert({ message: __("Expense saved"), indicator: "green" });
+				this.load();
+			},
+		});
+		d.show();
+	}
+
+	language_dialog() {
+		const d = new frappe.ui.Dialog({
+			title: __("Language"),
+			fields: [{ fieldname: "lang", label: __("Show my books in"), fieldtype: "Select",
+				options: [{ value: "en", label: "English" }, { value: "hi", label: "हिंदी" }, { value: "mr", label: "मराठी" }],
+				default: this.data.lang || "en" }],
+			primary_action_label: __("Save"),
+			primary_action: async (v) => {
+				await frappe.call({ method: API + "set_language", args: { lang: v.lang } });
+				window.location.reload();
 			},
 		});
 		d.show();
